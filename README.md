@@ -75,7 +75,7 @@ git clone https://github.com/DavidBao03/Needle-plusplus.git
 3. Navigate to the project directory:
 
 ```bash
-cd NEEDLE++
+cd Needle-plusplus
 ```
 
 4. Update `CMakeLists.txt` to specify the Python path in your conda environment:
