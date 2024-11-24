@@ -69,7 +69,7 @@ conda create --name <env> --file <this file>
 2. Clone the repository:
 
 ```bash
-git clone <repository_url>
+git clone https://github.com/DavidBao03/Needle-plusplus.git
 ```
 
 3. Navigate to the project directory:
