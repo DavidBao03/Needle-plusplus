@@ -514,10 +514,82 @@ class NDArray:
         the GPU version will just work natively by tiling any input size).
         """
 
-        assert self.ndim == 2 and other.ndim == 2
-        assert self.shape[1] == other.shape[0]
+        assert self.ndim >= 2 and other.ndim >= 2, "Both arrays must have at least 2 dimensions"
 
-        m, n, p = self.shape[0], self.shape[1], other.shape[1]
+        # Extract matrix dimensions
+        self_shape = self.shape
+        other_shape = other.shape
+
+        # Extract batch and matrix shapes
+        self_mat_shape = self_shape[-2:]  # (..., m, n)
+        other_mat_shape = other_shape[-2:]  # (..., n, p)
+
+        # Validate matrix multiplication compatibility
+        assert self_mat_shape[1] == other_mat_shape[0], \
+            f"Incompatible matrix dimensions {self_mat_shape} and {other_mat_shape} for multiplication."
+
+        # Compute batch shapes
+        self_batch_shape = self_shape[:-2]
+        other_batch_shape = other_shape[:-2]
+
+        # Compute broadcasted batch shape
+        def compute_broadcast_shape(shape1, shape2):
+            diff = len(shape1) - len(shape2)
+            if diff > 0:
+                shape2 = (1,) * diff + shape2
+            elif diff < 0:
+                shape1 = (1,) * (-diff) + shape1
+
+            broadcast_shape = []
+            for dim1, dim2 in zip(shape1, shape2):
+                if dim1 == 1:
+                    broadcast_shape.append(dim2)
+                elif dim2 == 1:
+                    broadcast_shape.append(dim1)
+                elif dim1 == dim2:
+                    broadcast_shape.append(dim1)
+                else:
+                    raise ValueError(f"Shapes {shape1} and {shape2} are not broadcastable.")
+            return tuple(broadcast_shape)
+
+        output_batch_shape = compute_broadcast_shape(self_batch_shape, other_batch_shape)
+
+        def pad_dims(shape, target_shape):
+            """
+            Pad the dimensions of a shape with singleton dimensions (1) to match the target shape.
+
+            Args:
+                shape (tuple): Current shape of the array.
+                target_shape (tuple): Desired target shape.
+
+            Returns:
+                tuple: Padded shape.
+            """
+            diff = len(target_shape) - len(shape)
+            if diff > 0:
+                shape = (1,) * diff + shape  # Prepend 1s to match target shape length
+            return shape
+
+        self_padded_shape = pad_dims(self_shape, output_batch_shape + self_mat_shape)
+        other_padded_shape = pad_dims(other_shape, output_batch_shape + other_mat_shape)
+
+        # Broadcast matrices to match the batch shape
+        self_broadcasted = self.compact().reshape(self_padded_shape).broadcast_to(output_batch_shape + self_mat_shape)
+        other_broadcasted = other.compact().reshape(other_padded_shape).broadcast_to(output_batch_shape + other_mat_shape)
+
+        # Extract matrix dimensions
+        m, n = self_mat_shape
+        p = other_mat_shape[1]
+
+        # Compute output shape
+        out_shape = output_batch_shape + (m, p)
+        out = NDArray.make(out_shape, device=self.device)
+
+        # Flatten batch dimensions for efficient matrix multiplication
+        total_matmuls = int(np.prod(output_batch_shape)) if output_batch_shape else 1
+        self_flat = self_broadcasted.compact().reshape((total_matmuls, m, n))
+        other_flat = other_broadcasted.compact().reshape((total_matmuls, n, p))
+        out_flat = out.compact().reshape((total_matmuls, m, p))
 
         # if the matrix is aligned, use tiled matrix multiplication
         if hasattr(self.device, "matmul_tiled") and all(
@@ -543,11 +615,18 @@ class NDArray:
             )
 
         else:
-            out = NDArray.make((m, p), device=self.device)
-            self.device.matmul(
-                self.compact()._handle, other.compact()._handle, out._handle, m, n, p
-            )
-            return out
+            out_temp = NDArray.make((m, p), device=self.device)
+            for i in range(total_matmuls):
+                self.device.matmul(
+                    self_flat[i, :, :].compact()._handle,
+                    other_flat[i, :, :].compact()._handle,
+                    out_temp._handle,
+                    m,
+                    n,
+                    p,
+                )
+                out_flat[i, :, :] = out_temp     
+        return out_flat.reshape(out_shape)
 
     ### Reductions, i.e., sum/max over all element or over given axis
     def reduce_view_out(self, axis, keepdims=False):

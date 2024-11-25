@@ -203,7 +203,7 @@ class LayerNorm1d(Module):
             mean = (x.sum((1,)) / x.shape[1]).reshape((x.shape[0], 1)).broadcast_to(x.shape)
             std = (((x - mean) ** 2).sum((1,)) / x.shape[1]).reshape((x.shape[0], 1)).broadcast_to(x.shape)
             deno = (std + self.eps)**0.5
-            return self.weight.broadcast_to(x.shape) * (x - mean) / deno + self.bias.broadcast_to(x.shape)
+            return self.weight.reshape((1, self.dim)).broadcast_to(x.shape) * (x - mean) / deno + self.bias.reshape((1, self.dim)).broadcast_to(x.shape)
         else:
             mean = (x.sum((2, ), keepdims=True) / x.shape[2])
             mean = mean.broadcast_to(x.shape)

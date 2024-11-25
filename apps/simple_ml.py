@@ -8,7 +8,7 @@ sys.path.append("python/")
 import needle as ndl
 
 import needle.nn as nn
-from apps.models import *
+from models import *
 import time
 device = ndl.cpu()
 
@@ -240,6 +240,7 @@ def epoch_general_ptb(data, model, seq_len=40, loss_fn=nn.SoftmaxLoss(), opt=Non
     correct, total_loss = 0, 0
     nbatch, batch_size = data.shape
     hidden = None
+    loss_fn = loss_fn()
     if opt is None:
         model.eval()
         for i in tqdm(range(0, nbatch - 1, seq_len)):
