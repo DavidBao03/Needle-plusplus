@@ -121,6 +121,8 @@ Contributions are welcome! Please feel free to submit pull requests.
 
 ## TODO
 
+- [ ] Fixed numerical problems on auto gradient
+- [ ] Support more than one dims ops (e.g., sum, max)
 - [ ] Implement more neural network layers (e.g., Vit, Bert)
 - [ ] Add more dataset loaders (e.g., ImageNet)
 - [ ] Improve CUDA backend performance
