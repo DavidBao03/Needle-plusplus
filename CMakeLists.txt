@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 project(needle C CXX)
-cmake_policy(SET CMP0146 OLD)
+if(POLICY CMP0148) 
+    cmake_policy(SET CMP0148 OLD)
+endif()
 
 # Set the correct Python environment (Conda environment path)
 set(CMAKE_PREFIX_PATH "/opt/homebrew/anaconda3/envs/needle/")

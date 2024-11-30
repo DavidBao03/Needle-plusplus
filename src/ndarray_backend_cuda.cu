@@ -6,6 +6,8 @@
 #include <iostream>
 #include <sstream>
 
+#include <cuda.h>
+
 namespace needle {
 namespace cuda {
 
@@ -546,6 +548,115 @@ void ReduceSum(const CudaArray& a, CudaArray* out, size_t reduce_size) {
   /// END SOLUTION
 }
 
+
+__global__ void forward_kernel(const scalar_t* Q, const scalar_t* K, scalar_t* V, const int N, const int d,
+                               const int Tc, const int Tr, const int Bc, const int Br, const float softmax_scale,
+                               scalar_t* l, scalar_t* m, scalar_t* O) {
+    int tx = threadIdx.x;
+    int bx = blockIdx.x; int by = blockIdx.y;  // batch and head index
+
+    // qkv offset is which_batch (batch_id * head * seq_len * head_dim) + which_head (head_id * seq_len * head_dim)
+    int qkv_offset = (bx * gridDim.y * N * d) + (by * N * d);  // gridDim.y = nh
+    // lm_offset is batch_id * head * seq_len + head_id * seq_len
+    int lm_offset = (bx * gridDim.y * N) + (by * N);  // offset for l and m
+
+    // Define SRAM for Q,K,V,S
+    extern __shared__ float sram[];
+    int tile_size = Bc * d;  // size of Qi, Kj, Vj
+    float* Qi = sram;
+    float* Kj = &sram[tile_size];
+    float* Vj = &sram[tile_size * 2];
+    float* S = &sram[tile_size * 3];
+
+    for (int j = 0; j < Tc; j++) {
+        // Load Kj, Vj to SRAM with boundary check
+        for (int x = 0; x < d; x++) {
+            // 每个线程在这里load进 2d的数据进share mem里
+            // 同时有Bc个线程一起load，那么load进的数据就是 Bc * 2d。
+            Kj[(tx * d) + x] = K[qkv_offset + (tile_size * j) + (tx * d) + x];
+            Vj[(tx * d) + x] = V[qkv_offset + (tile_size * j) + (tx * d) + x];
+        }
+        __syncthreads();
+
+        for (int i = 0; i < Tr; i++) {
+            // Load Qi to SRAM with boundary check
+            for (int x = 0; x < d; x++) {
+                Qi[(tx * d) + x] = Q[qkv_offset + (tile_size * i) + (tx * d) + x];
+            }
+            float row_m_prev = m[lm_offset + (Br * i) + tx];
+            float row_l_prev = l[lm_offset + (Br * i) + tx];
+
+            float row_m = -INFINITY;
+            for (int y = 0; y < Bc; y++) {
+                float sum = 0;
+                for (int x = 0; x < d; x++) {
+                    sum += Qi[(tx * d) + x] * Kj[(y * d) + x];
+                }
+                sum *= softmax_scale;
+                S[(Bc * tx) + y] = sum;
+                if (sum > row_m) row_m = sum;
+            }
+
+            float row_l = 0;
+            for (int y = 0; y < Bc; y++) {
+                S[(Bc * tx) + y] = __expf(S[(Bc * tx) + y] - row_m);
+                row_l += S[(Bc * tx) + y];
+            }
+
+            float row_m_new = max(row_m_prev, row_m);
+            float row_l_new = (__expf(row_m_prev - row_m_new) * row_l_prev) +
+                              (__expf(row_m - row_m_new) * row_l);
+
+            for (int x = 0; x < d; x++) {
+                float pv = 0;
+                for (int y = 0; y < Bc; y++) {
+                    pv += S[(Bc * tx) + y] * Vj[(y * d) + x];
+                }
+                if ((tx + (Br * i)) < N && (tx * d + x) < N * d) {
+                    O[qkv_offset + (tile_size * i) + (tx * d) + x] = (1 / row_l_new) *
+                        ((row_l_prev * __expf(row_m_prev - row_m_new) *
+                          O[qkv_offset + (tile_size * i) + (tx * d) + x]) +
+                         (__expf(row_m - row_m_new) * pv));
+                }
+            }
+            if ((tx + (Br * i)) < N) {
+                m[lm_offset + (Br * i) + tx] = row_m_new;
+                l[lm_offset + (Br * i) + tx] = row_l_new;
+            }
+        }
+        __syncthreads();
+    }
+}
+
+void Attention(const CudaArray& Q, const CudaArray& K, const CudaArray& V, CudaArray* out, const CudaArray& mask, CudaArray& m,
+               int batch_size, int num_heads, int seq_len, int dims) {
+    const int Bc = 32; const int Br = 32;
+
+    const int B = batch_size; const int nh = num_heads;
+    const int N = seq_len; const int d = dims;
+
+    const int Tc = (N + Bc - 1) / Bc;  // Ceil division
+    const int Tr = (N + Br - 1) / Br;
+    const float softmax_scale = 1.0 / sqrt(d);
+
+    CudaArray l = CudaArray(B * nh * N);
+
+    const int sram_size = (3 * Bc * d * sizeof(float)) + (Bc * Br * sizeof(float));
+    int max_sram_size;
+    cudaDeviceGetAttribute(&max_sram_size, cudaDevAttrMaxSharedMemoryPerBlock, 0);
+    printf("Max shared memory: %d, requested shared memory: %d \\n", max_sram_size, sram_size);
+
+    dim3 grid_dim(B, nh);  
+    dim3 block_dim(Bc);  
+
+    forward_kernel<<<grid_dim, block_dim, sram_size>>>(
+        Q.ptr, K.ptr, V.ptr,
+        N, d, Tc, Tr, Bc, Br, softmax_scale,
+        l.ptr, m.ptr, out->ptr
+    );
+}
+
+
 }  // namespace cuda
 }  // namespace needle
 
@@ -615,4 +726,6 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
 
   m.def("reduce_max", ReduceMax);
   m.def("reduce_sum", ReduceSum);
+
+  m.def("attention", Attention);
 }

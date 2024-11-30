@@ -702,6 +702,39 @@ class NDArray:
         return out.compact()
         ### END YOUR SOLUTION
 
+    def attention(self, K, V, max_, mask=None):
+        """
+        Compute the attention mechanism for input tensors Q, K, V.
+
+        Args:
+            K (NDArray): Key tensor of shape [BATCH_SIZE, NUM_HEADS, SEQ_LEN, DIMS].
+            V (NDArray): Value tensor of shape [BATCH_SIZE, NUM_HEADS, SEQ_LEN, DIMS].
+            mask (NDArray or None): Attention mask of shape [BATCH_SIZE, NUM_HEADS, SEQ_LEN, SEQ_LEN].
+                                If None, no mask is applied.
+
+        Returns:
+            NDArray: Output tensor of shape [BATCH_SIZE, NUM_HEADS, SEQ_LEN, DIMS].
+        """
+        # Validate input shapes
+        assert self.shape == K.shape == V.shape, "Q, K, V shapes must match"
+        B, nH, S, D = self.shape
+
+        # Validate mask shape
+        assert mask.shape == (B, nH, S, S), f"Mask shape must be {(B, nH, S, S)}, got {mask.shape}"
+
+        assert max_.shape == (B, nH, S), f"Max shape must be {(B, nH, S)}, got {max_.shape}"
+
+        # Ensure all tensors are on the same device
+        assert self.device == K.device == V.device == mask.device, "All tensors must be on the same device"
+
+        # Allocate output tensor
+        out = NDArray.make(self.shape, device=self.device)
+
+        # Call the device kernel for attention computation
+        self.device.attention(self._handle, K._handle, V._handle, out._handle, mask._handle, max_._handle, B, nH, S, D)
+
+        return out
+
 def array(a, dtype="float32", device=None):
     """Convenience methods to match numpy a bit more closely."""
     dtype = "float32" if dtype is None else dtype
@@ -778,3 +811,6 @@ def split(a, axis:int = 0):
         out_arrays.append(a[tuple(target_slice)].compact().reshape(out_shape))
     
     return out_arrays
+
+def attention(Q, K, V, max_, mask):
+    return Q.attention(K, V, max_, mask)

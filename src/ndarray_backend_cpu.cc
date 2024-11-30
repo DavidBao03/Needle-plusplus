@@ -447,6 +447,92 @@ void ReduceSum(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
   /// END SOLUTION
 }
 
+void Attention(const AlignedArray& Q, const AlignedArray& K, const AlignedArray& V, AlignedArray* out, const AlignedArray& mask,
+               int batch_size, int num_heads, int seq_len, int dims) {
+  /**
+   * Compute the scaled dot-product attention mechanism for multi-head attention.
+   *
+   * Args:
+   *   Q: 4D tensor of shape [BATCH_SIZE, NUM_HEAD, SEQ_LEN, DIMS] for queries
+   *   K: 4D tensor of shape [BATCH_SIZE, NUM_HEAD, SEQ_LEN, DIMS] for keys
+   *   V: 4D tensor of shape [BATCH_SIZE, NUM_HEAD, SEQ_LEN, DIMS] for values
+   *   out: 4D tensor of shape [BATCH_SIZE, NUM_HEAD, SEQ_LEN, DIMS] to write the output to
+   *   batch_size: Number of batches
+   *   num_heads: Number of attention heads
+   *   seq_len: Length of the sequence
+   *   dims: Dimensionality of each head
+   */
+  
+  // Temporary storage for attention scores and softmax weights
+  std::vector<float> attention_scores(seq_len * seq_len);
+  std::vector<float> softmax_weights(seq_len * seq_len);
+
+  // Scaling factor for numerical stability (sqrt(dims))
+  float scale = 1.0 / std::sqrt(static_cast<float>(dims));
+
+  // Iterate over batches
+  for (int b = 0; b < batch_size; ++b) {
+    // Iterate over attention heads
+    for (int h = 0; h < num_heads; ++h) {
+      // Step 1: Compute attention scores (Q * K^T) for this head
+      for (int i = 0; i < seq_len; ++i) {
+        for (int j = 0; j < seq_len; ++j) {
+          float dot_product = 0.0;
+          for (int d = 0; d < dims; ++d) {
+            dot_product += Q.ptr[b * num_heads * seq_len * dims + h * seq_len * dims + i * dims + d] *
+                           K.ptr[b * num_heads * seq_len * dims + h * seq_len * dims + j * dims + d];
+          }
+          attention_scores[i * seq_len + j] = dot_product * scale;
+        }
+      }
+
+      // Debug mask
+      // for (int i = 0; i < seq_len; ++i) {
+      //   for (int j = 0; j < seq_len; ++j) {
+      //     std::cout << mask.ptr[b * num_heads * seq_len * seq_len + h * seq_len * seq_len + i * seq_len + j] << " ";
+      //   }
+      //   std::cout << std::endl;
+      // }
+
+      // Step 2: Apply the mask (if provided)
+      for (int i = 0; i < seq_len; ++i) {
+        for (int j = 0; j < seq_len; ++j) {
+          attention_scores[i * seq_len + j] += mask.ptr[b * num_heads * seq_len * seq_len + h * seq_len * seq_len + i * seq_len + j];
+        }
+      }
+
+      // Step 3: Apply softmax to the attention scores row-wise
+      for (int i = 0; i < seq_len; ++i) {
+        float max_score = -std::numeric_limits<float>::infinity();
+        for (int j = 0; j < seq_len; ++j) {
+          max_score = std::max(max_score, attention_scores[i * seq_len + j]);
+        }
+        float sum_exp = 0.0;
+        for (int j = 0; j < seq_len; ++j) {
+          softmax_weights[i * seq_len + j] = std::exp(attention_scores[i * seq_len + j] - max_score);
+          sum_exp += softmax_weights[i * seq_len + j];
+        }
+        for (int j = 0; j < seq_len; ++j) {
+          softmax_weights[i * seq_len + j] /= sum_exp;
+        }
+      }
+
+      // Step 4: Compute the weighted sum of V
+      for (int i = 0; i < seq_len; ++i) {
+        for (int d = 0; d < dims; ++d) {
+          float weighted_sum = 0.0;
+          for (int j = 0; j < seq_len; ++j) {
+            weighted_sum += softmax_weights[i * seq_len + j] *
+                            V.ptr[b * num_heads * seq_len * dims + h * seq_len * dims + j * dims + d];
+          }
+          out->ptr[b * num_heads * seq_len * dims + h * seq_len * dims + i * dims + d] = weighted_sum;
+        }
+      }
+    }
+  }
+}
+
+
 }  // namespace cpu
 }  // namespace needle
 
@@ -507,4 +593,6 @@ PYBIND11_MODULE(ndarray_backend_cpu, m) {
 
   m.def("reduce_max", ReduceMax);
   m.def("reduce_sum", ReduceSum);
+
+  m.def("attention", Attention);
 }
