@@ -60,16 +60,16 @@ A deep learning framework implemented from scratch, featuring automatic differen
 
 ## Installation
 
-1. Create a new conda environment:
-
-```bash
-conda create --name <env> --file <this file>
-```
-
-2. Clone the repository:
+1. Clone the repository:
 
 ```bash
 git clone https://github.com/DavidBao03/Needle-plusplus.git
+```
+
+2. Create a new conda environment:
+
+```bash
+conda create --name <env> --file requirements.txt
 ```
 
 3. Navigate to the project directory:
